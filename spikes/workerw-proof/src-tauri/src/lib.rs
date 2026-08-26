@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use tauri::Manager;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::{w, BOOL, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
@@ -90,7 +90,7 @@ fn find_workerw() -> Option<HWND> {
     unsafe {
         let progman = FindWindowW(w!("Progman"), PCWSTR::null()).ok()?;
         // demander à explorer.exe de (re)créer la fenêtre WorkerW si absente
-        let _ = SendMessageW(progman, WM_SPAWN_WORKERW, WPARAM(0), LPARAM(0));
+        let _ = SendMessageW(progman, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
 
         // recherche directe : la SHELLDLL_DefView est enfant de Progman ; le WorkerW
         // qui la suit est une fenêtre top-level
