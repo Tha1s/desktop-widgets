@@ -27,9 +27,20 @@ jobs:
           workspaces: spikes/workerw-proof/src-tauri
 
       - name: Build (debug)
-        run: cargo build
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee cargo-build.log
+
+      - name: Upload build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-build-log
+          path: spikes/workerw-proof/src-tauri/cargo-build.log
 
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: workerw-proof
