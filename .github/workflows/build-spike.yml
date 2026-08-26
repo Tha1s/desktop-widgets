@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [feat/desktop-hub-engine]
-    paths: ["spikes/**", ".github/workflows/**"]
 
 jobs:
   build:
