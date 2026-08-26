@@ -42,17 +42,19 @@ flowchart TD
 1. Créer le workspace Cargo + `src-tauri/Cargo.toml` (tauri 2, `windows`, serde)
 2. `tauri.conf.json` : fenêtre unique `{ transparent: true, decorations: false, shadow: false, skipTaskbar: true }`
 3. `main.rs` + `lib.rs` builder minimal, `index.html` transparente
-4. Vérifier le build via `cargo.exe build` invoqué depuis WSL (le dossier `/mnt/c` est visible par Windows) — première commande réelle du repo
+4. Vérifier le build via le workflow GitHub Actions (runner `windows-latest`, sans SAC) — le build cargo local est bloqué par Smart App Control sur cette machine (vérifié en phase 0) ; l'exe s'exécute ensuite localement
 5. Frontend 100 % vanilla HTML/CSS/JS : aucun package manager / bundler
 
-### `2)` Module WorkerW
-> Flotter la fenêtre au niveau du bureau.
+### `2)` Placement bureau : WorkerW ou Progman
+> Flotter la fenêtre au niveau du bureau — derrière les icônes, au-dessus du wallpaper.
 
-1. `core/workerw.rs` : `FindWindowEx` (Progman → SHELLDLL_DefView → WorkerW)
-2. Sinon créer le WorkerW via `SendMessage 0x052C` (WM_SPAWN_WORKERW)
-3. Récupérer le HWND Tauri (`Window::hwnd`) et `SetParent` sous le WorkerW
-4. Appliquer les réglages validés en phase 0 (transparence qui survit, z-order)
-5. **Repli si aucune WorkerW trouvée/créée** (explorer arrêté, desktop slideshow/Spotlight) : fenêtre top-level `always-on-bottom` + log — jamais de crash silencieux
+1. `core/workerw.rs` : trouver `Progman` ; **ne jamais spammer `SendMessage 0x052C`** (ça crée des WorkerW fantômes sur Win11)
+2. **Cas standard** : si une fenêtre `WorkerW` contenant `SHELLDLL_DefView` existe → `SetParent` dessous
+3. **Cas Win11 courant (icônes sous Progman)** : sinon → `SetParent` sous **Progman** + `SetWindowPos(HWND_BOTTOM)` → la fenêtre passe sous les icônes (elles sont une autre enfant de Progman, au-dessus dans le z-order)
+4. **Retirer `WS_EX_TOPMOST`** de la fenêtre avant tout reparenting (sinon elle reste au-dessus des icônes)
+5. **Valider le parent choisi** avant `SetParent` (contient la `SHELLDLL_DefView`, ou c'est Progman) : ne jamais parenter vers un WorkerW fantôme → fenêtre clippée invisible
+6. Appliquer les réglages validés en phase 0 (transparence qui survit, z-order)
+7. Repli ultime si Progman absent : top-level `always-on-bottom` + log — jamais de crash silencieux
 
 ### `3)` Fond transparent webview
 > Éviter le fond noir WebView2.
@@ -64,6 +66,6 @@ flowchart TD
 
 | Task | Acceptance criteria |
 | ---- | ------------------- |
-| 1 | `cargo.exe build` compile depuis WSL ; l'app lance une fenêtre sans bordure sur le Windows host |
-| 2 | La fenêtre apparaît derrière les icônes du bureau, au-dessus du fond d'écran ; si le WorkerW est introuvable, repli en top-level `always-on-bottom` + log |
+| 1 | Le build compile sur le runner CI (GitHub Actions, sans SAC) ; l'app lance une fenêtre sans bordure sur le Windows host |
+| 2 | La fenêtre apparaît **derrière les icônes du bureau**, au-dessus du fond d'écran (WorkerW si dispo, sinon parentée sous Progman + bottom) ; elle n'est **jamais invisible** (parent validé, pas de WorkerW fantôme) ; log des étapes |
 | 3 | Le fond est transparent (pas de carré noir) |

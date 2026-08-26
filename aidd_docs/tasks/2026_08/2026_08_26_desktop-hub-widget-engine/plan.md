@@ -1,6 +1,6 @@
 ---
 objective: "Le moteur Desktop Hub flotte des widgets Tauri sous le bureau Windows, chacun dans une webview isolée avec un design remplaçable par machine, manipulable (drag, resize, rotation libre, click-through sur forme arbitraire) et persisté par widget."
-status: blocked
+status: in-progress
 ---
 
 # Plan: Moteur Desktop Hub
@@ -41,12 +41,13 @@ status: blocked
 | Un seul binaire Windows ; dossier de données par machine (`%APPDATA%/desktop-hub`) pour skins + layouts | Deux machines, mêmes widgets, designs différents — rien de spécifique dans le binaire |
 | Skins servis via un schéma d'URI custom Rust (`skin://`) | JS sans accès FS ; compatible CSP ; prépare l'ouverture à des plugins |
 | Rotation = `transform` CSS dans la webview + fenêtre boîte englobante ; click-through au niveau fenêtre | Windows ne tourne pas un HWND ; modèle le plus simple donnant la rotation libre |
-| Click-through = hit-map d'alpha par pixel (`WM_NCHITTEST`, repère local + inverse-rotation) | Formes arbitraires (cercle dans un carré, glassmorphism) ; indépendant de la forme |
-| Source de la hit-map (capture moteur vs masque déclaré) et mode WebView2 (fenêtré vs composition) tranchés par le spike (phase 0) | Inconnues techniques résiduelles ; à prouver sur la vraie machine avant le build |
+| Click-through = **région GDI `SetWindowRgn`** construite depuis le masque alpha (repère local, pixels physiques) | `WM_NCHITTEST`/`HTTRANSPARENT` ne fait pas passer les clics au bureau pour une fenêtre top-level (même thread seulement — prouvé en phase 0) ; la région gère formes arbitraires + rotation |
+| Placement bureau : **WorkerW si dispo, sinon parent Progman + `SetWindowPos(HWND_BOTTOM)`** ; `WS_EX_TOPMOST` retiré avant reparenting | Sur Win11 courant, les icônes sont sous Progman et il n'existe pas de WorkerW utile ; le repli `always-on-bottom` laisse la fenêtre devant les icônes (constaté) |
+| Source du masque (capture moteur vs masque déclaré) = choix verrouillé par le spike (phase 0) ; mode **fenêtré** validé (composition non nécessaire) | Inconnues résiduelles levées sur la vraie machine pendant le spike |
 | Config par widget = fichier JSON individuel | Jamais de structure globale unique (AGENTS.md) |
-| Crate `windows` pour Win32 | Accès `FindWindowEx`/`SendMessage`/`SetParent`/`SetWindowRgn`/`WM_NCHITTEST` |
-| Build : `cargo.exe` depuis WSL pour le dev ; machines cibles en Windows natif (ex. PC sans WSL) | Tauri v2 Windows ne se cross-compile pas depuis WSL ; `/mnt/c` est visible par Windows |
+| Crate `windows` pour Win32 | Accès `FindWindowEx`/`SendMessage`/`SetParent`/`SetWindowRgn`/`SetWindowPos` |
+| Build : **GitHub Actions (runner `windows-latest`, sans SAC)** ; l'exe s'exécute localement (SAC ne bloque pas l'exécution, vérifié) | Smart App Control bloque les build-scripts cargo sur cette machine (vérifié) ; `cargo.exe` depuis WSL ne contourne pas SAC |
 | Rotation libre pivotée autour du **centre du widget** (repère local) | Bbox déterministe, resize simple, pas de géométrie dépendante du curseur |
 | Permissions = `permissions[]` du manifest (octroi, éditable dans le data_dir) ∧ allow-list compilée dans le moteur | Modèle perso/single-binary ; pas d'UI d'installation ; filet de sécurité moteur |
 | Persistance ancrée `{ monitor_index, anchor, offset, size, rotation }`, fallback moniteur primaire | Changement de layout d'écrans → plus rien ne part hors-écran ; multi-écran complet reste différé |
-| Hit-map d'alpha en **pixels physiques** (résolution du PNG de CapturePreview) | Alignement correct du click-through sous scaling DPI ≠ 100 % |
+| Masque d'alpha en **pixels physiques** ; région GDI construite depuis ce masque | Alignement correct du click-through sous scaling DPI ≠ 100 % |
