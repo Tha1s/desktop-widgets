@@ -123,6 +123,7 @@ pub fn run() {
             };
 
             // Retirer WS_EX_TOPMOST : sinon la fenêtre reste au-dessus des icônes.
+            // (le spike ne renvoie jamais 0x052C : ça spawn des WorkerW fantômes sur Win11)
             unsafe {
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 let new_ex = ex & !WS_EX_TOPMOST;
