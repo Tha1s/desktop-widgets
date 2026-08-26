@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "workerw-proof",
+  "version": "0.1.0",
+  "identifier": "dev.workerw.proof",
+  "build": {
+    "frontendDist": "../src/ui"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "workerw-proof",
+        "width": 400,
+        "height": 400,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}
