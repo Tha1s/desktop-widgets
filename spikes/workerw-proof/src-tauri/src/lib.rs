@@ -133,6 +133,7 @@ pub fn run() {
 
             match find_parent_target() {
                 Some((target, is_workerw)) => unsafe {
+                    // Sur cette machine, la cible est Progman (icônes sous Progman).
                     match SetParent(hwnd, Some(target)) {
                         Ok(prev) => {
                             let kind = if is_workerw { "WorkerW" } else { "Progman" };
