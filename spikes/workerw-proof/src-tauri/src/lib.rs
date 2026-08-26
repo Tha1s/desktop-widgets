@@ -1,20 +1,17 @@
 #![cfg(windows)]
 
-use std::time::Duration;
 use tauri::Manager;
 use windows::core::{w, BOOL, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{CreatePolygonRgn, SetWindowRgn, HRGN, WINDING};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetWindowLongW, GetWindowRect,
-    IsWindowVisible, SendMessageW, SetParent, SetWindowLongPtrW, GWL_EXSTYLE, GWL_STYLE,
-    GWLP_HWNDPARENT,
+    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetWindowLongPtrW, IsWindowVisible,
+    SetParent, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_BOTTOM, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE,
 };
 
-const WM_SPAWN_WORKERW: u32 = 0x052C;
-
-type TopInfo = (HWND, String, bool, bool, (i32, i32, i32, i32));
+const WS_EX_TOPMOST: isize = 0x0000_0010;
 
 const CIRCLE_CX: f64 = 200.0;
 const CIRCLE_CY: f64 = 200.0;
@@ -57,64 +54,33 @@ fn has_defview_child(hwnd: HWND) -> bool {
     }
 }
 
-unsafe extern "system" fn collect_top_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let list = lparam.0 as *mut Vec<TopInfo>;
-    let class = class_of(hwnd);
-    if class == "Progman"
-        || class == "WorkerW"
-        || class == "SHELLDLL_DefView"
-        || class == "ApplicationFrameWindow"
-    {
-        let visible = IsWindowVisible(hwnd).as_bool();
-        let has_dv = has_defview_child(hwnd);
-        let mut r = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        let _ = GetWindowRect(hwnd, &mut r);
-        (*list).push((
-            hwnd,
-            class,
-            visible,
-            has_dv,
-            (r.left, r.top, r.right, r.bottom),
-        ));
+unsafe extern "system" fn find_defview_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if class_of(hwnd) == "WorkerW" && has_defview_child(hwnd) {
+        let slot = lparam.0 as *mut Option<HWND>;
+        (*slot) = Some(hwnd);
+        return BOOL(0);
     }
     BOOL(1)
 }
 
-unsafe extern "system" fn collect_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let list = lparam.0 as *mut Vec<HWND>;
-    if class_of(hwnd) == "WorkerW" {
-        (*list).push(hwnd);
-    }
-    BOOL(1)
-}
-
-fn collect_workerw_windows() -> Vec<HWND> {
+/// Cible de parentage : un WorkerW contenant SHELLDLL_DefView (cas standard),
+/// sinon Progman (Win11 courant : les icônes vivent sous Progman).
+/// Renvoie (hwnd, est_un_WorkerW).
+fn find_parent_target() -> Option<(HWND, bool)> {
     unsafe {
-        let mut out: Vec<HWND> = Vec::new();
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null())
+            .ok()
+            .filter(|h| !h.is_invalid())?;
+
+        let mut by_enum: Option<HWND> = None;
         let _ = EnumWindows(
-            Some(collect_workerw_cb),
-            LPARAM(&mut out as *mut Vec<HWND> as isize),
+            Some(find_defview_workerw_cb),
+            LPARAM(&mut by_enum as *mut Option<HWND> as isize),
         );
-        out
-    }
-}
-
-fn log_window_identity(hwnd: HWND) {
-    unsafe {
-        let class = class_of(hwnd);
-        let style = GetWindowLongW(hwnd, GWL_STYLE);
-        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        let ex_layer = ex & 0x0008_0000 != 0; // WS_EX_LAYERED
-        let ex_transparent = ex & 0x0000_0020 != 0; // WS_EX_TRANSPARENT
-        let ex_noredir = ex & 0x0020_0000 != 0; // WS_EX_NOREDIRECTIONBITMAP
-        log(&format!(
-            "window: class='{class}' hwnd={hwnd:?} style=0x{style:08x} exstyle=0x{ex:08x} (layered={ex_layer} transparent={ex_transparent} noredir={ex_noredir})"
-        ));
+        if let Some(ww) = by_enum {
+            return Some((ww, true));
+        }
+        Some((progman, false))
     }
 }
 
@@ -156,82 +122,47 @@ pub fn run() {
                 }
             };
 
-            log("==== spike diagnostic ====");
-            log_window_identity(hwnd);
-
+            // Retirer WS_EX_TOPMOST : sinon la fenêtre reste au-dessus des icônes.
             unsafe {
-                let mut top: Vec<TopInfo> = Vec::new();
-                let _ = EnumWindows(
-                    Some(collect_top_cb),
-                    LPARAM(&mut top as *mut Vec<TopInfo> as isize),
-                );
-                for (h, class, visible, has_dv, rect) in &top {
-                    log(&format!(
-                        "top: class='{class}' hwnd={h:?} visible={visible} hasDefViewChild={has_dv} rect={rect:?}"
-                    ));
-                }
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let new_ex = ex & !WS_EX_TOPMOST;
+                let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+                log(&format!("exstyle 0x{ex:08x} -> 0x{new_ex:08x} (TOPMOST retiré)"));
             }
 
-            let progman = unsafe {
-                FindWindowW(w!("Progman"), PCWSTR::null())
-                    .ok()
-                    .filter(|h| !h.is_invalid())
-            };
-            match progman {
-                Some(p) => log(&format!("Progman found = {p:?}")),
-                None => log("Progman NOT FOUND"),
-            }
-
-            // (re)créer le WorkerW via 0x052C et re-collecter quelques fois
-            let mut candidates = collect_workerw_windows();
-            if let Some(p) = progman {
-                for _ in 0..10 {
-                    unsafe {
-                        let _ = SendMessageW(p, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
-                    }
-                    let fresh = collect_workerw_windows();
-                    if fresh.len() > candidates.len() {
-                        candidates = fresh;
-                    }
-                    if !candidates.is_empty() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-            log(&format!("WorkerW candidates: {}", candidates.len()));
-            for ww in &candidates {
-                let visible = unsafe { IsWindowVisible(*ww).as_bool() };
-                let has_dv = has_defview_child(*ww);
-                log(&format!("candidate WorkerW {ww:?} visible={visible} hasDefViewChild={has_dv}"));
-            }
-
-            let mut parented = false;
-            for ww in &candidates {
-                unsafe {
-                    match SetParent(hwnd, Some(*ww)) {
+            match find_parent_target() {
+                Some((target, is_workerw)) => unsafe {
+                    match SetParent(hwnd, Some(target)) {
                         Ok(prev) => {
-                            log(&format!("SetParent -> {ww:?} OK (prev={prev:?})"));
-                            parented = true;
-                            break;
+                            let kind = if is_workerw { "WorkerW" } else { "Progman" };
+                            log(&format!(
+                                "SetParent -> {target:?} ({kind}) OK (prev={prev:?})"
+                            ));
+                            if !is_workerw {
+                                // Fond du z-order de Progman -> sous les icônes
+                                let r = SetWindowPos(
+                                    hwnd,
+                                    Some(HWND_BOTTOM),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                                log(&format!("SetWindowPos(HWND_BOTTOM) -> {r:?}"));
+                            }
                         }
-                        Err(e) => log(&format!("SetParent -> {ww:?} failed: {e:?}")),
+                        Err(e) => log(&format!("SetParent failed: {e:?}")),
                     }
+                },
+                None => {
+                    log("Progman NOT FOUND — fallback always-on-bottom");
+                    let _ = win.set_always_on_bottom(true);
                 }
             }
 
-            if !parented {
-                unsafe {
-                    if let Some(ww) = candidates.first() {
-                        let prev = SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, ww.0 as isize);
-                        log(&format!("SetWindowLongPtr(GWLP_HWNDPARENT, {ww:?}) -> prev={prev:?}"));
-                    }
-                }
-                log("fallback always-on-bottom");
-                let _ = win.set_always_on_bottom(true);
-            }
-
-            // Click-through : région de fenêtre = empreinte opaque du cercle tourné.
+            // Click-through : la région de fenêtre = empreinte opaque du cercle tourné.
+            // Les pixels hors région ne font pas partie de la fenêtre -> clics au bureau.
             unsafe {
                 let scale = GetDpiForWindow(hwnd) as f64 / 96.0;
                 let rgn = build_circle_region(scale);
