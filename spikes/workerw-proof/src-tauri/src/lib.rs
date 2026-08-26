@@ -1,14 +1,13 @@
 #![cfg(windows)]
 
+use std::time::Duration;
 use tauri::Manager;
 use windows::core::{w, BOOL, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::{CreatePolygonRgn, SetWindowRgn, HRGN, WINDING};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, SendMessageW, SetParent, HTCLIENT,
-    HTTRANSPARENT, WM_NCHITTEST,
+    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, SendMessageW, SetParent,
 };
 
 const WM_SPAWN_WORKERW: u32 = 0x052C;
@@ -33,41 +32,6 @@ fn log(msg: &str) {
     }
 }
 
-fn inside_circle(local_x: f64, local_y: f64) -> bool {
-    let dx = local_x - CIRCLE_CX;
-    let dy = local_y - CIRCLE_CY;
-    let (sin, cos) = ROT_RAD.sin_cos();
-    let ix = dx * cos + dy * sin; // inverse rotation (-45°)
-    let iy = -dx * sin + dy * cos;
-    ix * ix + iy * iy <= CIRCLE_R * CIRCLE_R
-}
-
-unsafe extern "system" fn subclass_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    _uid_subclass: usize,
-    _ref_data: usize,
-) -> LRESULT {
-    if msg == WM_NCHITTEST {
-        let x = (lparam.0 & 0xFFFF) as i16 as i32;
-        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-        let mut pt = POINT { x, y };
-        let _ = ScreenToClient(hwnd, &mut pt);
-        // le contenu HTML est en pixels logiques ; convertir le client physique
-        let scale = GetDpiForWindow(hwnd) as f64 / 96.0;
-        let (lx, ly) = (pt.x as f64 / scale, pt.y as f64 / scale);
-        let hit: isize = if inside_circle(lx, ly) {
-            HTCLIENT as isize
-        } else {
-            HTTRANSPARENT as isize
-        };
-        return LRESULT(hit);
-    }
-    DefSubclassProc(hwnd, msg, wparam, lparam)
-}
-
 unsafe extern "system" fn enum_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let mut buf = [0u16; 128];
     let len = GetClassNameW(hwnd, &mut buf);
@@ -77,10 +41,12 @@ unsafe extern "system" fn enum_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let class = String::from_utf16_lossy(&buf[..len as usize]);
     if class == "WorkerW" {
         let defview = FindWindowExW(Some(hwnd), None, w!("SHELLDLL_DefView"), PCWSTR::null());
-        if let Ok(_defview) = defview {
-            let found = lparam.0 as *mut Option<HWND>;
-            (*found) = Some(hwnd);
-            return BOOL(0);
+        if let Ok(defview) = defview {
+            if !defview.is_invalid() {
+                let slot = lparam.0 as *mut Option<HWND>;
+                (*slot) = Some(hwnd);
+                return BOOL(0);
+            }
         }
     }
     BOOL(1)
@@ -88,28 +54,66 @@ unsafe extern "system" fn enum_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
 
 fn find_workerw() -> Option<HWND> {
     unsafe {
-        let progman = FindWindowW(w!("Progman"), PCWSTR::null()).ok()?;
-        // demander à explorer.exe de (re)créer la fenêtre WorkerW si absente
-        let _ = SendMessageW(progman, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
-
-        // recherche directe : la SHELLDLL_DefView est enfant de Progman ; le WorkerW
-        // qui la suit est une fenêtre top-level
-        if let Ok(defview) = FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), PCWSTR::null())
-        {
-            if let Ok(workerw) =
-                FindWindowExW(None, Some(defview), w!("WorkerW"), PCWSTR::null())
-            {
-                return Some(workerw);
+        let progman = match FindWindowW(w!("Progman"), PCWSTR::null()) {
+            Ok(h) if !h.is_invalid() => h,
+            _ => {
+                log("Progman NOT FOUND");
+                return None;
             }
+        };
+        log(&format!("Progman found = {progman:?}"));
+
+        for attempt in 0..40 {
+            // demander à explorer.exe de (re)créer le WorkerW (message async)
+            let _ = SendMessageW(progman, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
+
+            // 1) un WorkerW contenant SHELLDLL_DefView (structure classique)
+            let mut by_enum: Option<HWND> = None;
+            let _ = EnumWindows(
+                Some(enum_workerw_cb),
+                LPARAM(&mut by_enum as *mut Option<HWND> as isize),
+            );
+            if let Some(ww) = by_enum {
+                log(&format!(
+                    "WorkerW (avec SHELLDLL_DefView) via EnumWindows, tentative {attempt}: {ww:?}"
+                ));
+                return Some(ww);
+            }
+
+            // 2) repli : n'importe quel WorkerW top-level
+            if let Ok(ww) = FindWindowExW(None, None, w!("WorkerW"), PCWSTR::null()) {
+                if !ww.is_invalid() {
+                    log(&format!(
+                        "WorkerW (n'importe lequel) via FindWindowEx, tentative {attempt}: {ww:?}"
+                    ));
+                    return Some(ww);
+                }
+            }
+
+            std::thread::sleep(Duration::from_millis(50));
         }
-        // repli : énumération des fenêtres top-level pour un WorkerW contenant SHELLDLL_DefView
-        let mut found: Option<HWND> = None;
-        let _ = EnumWindows(
-            Some(enum_workerw_cb),
-            LPARAM(&mut found as *mut Option<HWND> as isize),
-        );
-        found
+        log("WorkerW NOT FOUND après 40 tentatives");
+        None
     }
+}
+
+/// Région = empreinte opaque : polygone approximant le cercle tourné à 45°,
+/// converti en pixels physiques (scaling DPI).
+fn build_circle_region(scale: f64) -> HRGN {
+    const N: usize = 72;
+    let cx = (CIRCLE_CX * scale) as i32;
+    let cy = (CIRCLE_CY * scale) as i32;
+    let r = CIRCLE_R * scale;
+    let mut pts = [POINT { x: 0, y: 0 }; N];
+    for i in 0..N {
+        let a = i as f64 * std::f64::consts::TAU / N as f64 + ROT_RAD;
+        let (sin, cos) = a.sin_cos();
+        pts[i] = POINT {
+            x: cx + (r * cos) as i32,
+            y: cy + (r * sin) as i32,
+        };
+    }
+    unsafe { CreatePolygonRgn(&pts, WINDING) }
 }
 
 pub fn run() {
@@ -131,11 +135,6 @@ pub fn run() {
                 }
             };
 
-            unsafe {
-                let ok = SetWindowSubclass(hwnd, Some(subclass_proc), 1, 0);
-                log(&format!("SetWindowSubclass ok={}", ok.0 != 0));
-            }
-
             match find_workerw() {
                 Some(workerw) => unsafe {
                     match SetParent(hwnd, Some(workerw)) {
@@ -146,6 +145,21 @@ pub fn run() {
                 None => {
                     log("WorkerW NOT FOUND — fallback always-on-bottom");
                     let _ = win.set_always_on_bottom(true);
+                }
+            }
+
+            // Click-through : la région de fenêtre = empreinte opaque du cercle tourné.
+            // Les pixels hors région ne font pas partie de la fenêtre -> les clics
+            // passent au bureau. (WM_NCHITTEST + HTTRANSPARENT ne suffit pas pour une
+            // fenêtre top-level vers une autre thread.)
+            unsafe {
+                let scale = GetDpiForWindow(hwnd) as f64 / 96.0;
+                let rgn = build_circle_region(scale);
+                if rgn.is_invalid() {
+                    log("CreatePolygonRgn failed");
+                } else {
+                    let res = SetWindowRgn(hwnd, Some(rgn), true);
+                    log(&format!("SetWindowRgn ok (ret={res})"));
                 }
             }
             Ok(())
