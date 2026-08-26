@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 use tauri::Manager;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Controls::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -76,7 +76,9 @@ unsafe extern "system" fn enum_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
     let class = String::from_utf16_lossy(&buf[..len as usize]);
     if class == "WorkerW" {
-        if let Ok(_defview) = FindWindowExW(hwnd, None, w!("SHELLDLL_DefView"), None) {
+        let child_after: Option<HWND> = None;
+        let window: Option<PCWSTR> = None;
+        if let Ok(_defview) = FindWindowExW(hwnd, child_after, w!("SHELLDLL_DefView"), window) {
             let found = lparam.0 as *mut Option<HWND>;
             (*found) = Some(hwnd);
             return BOOL(0);
@@ -87,12 +89,19 @@ unsafe extern "system" fn enum_workerw_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
 
 fn find_workerw() -> Option<HWND> {
     unsafe {
-        let progman = FindWindowW(w!("Progman"), None).ok()?;
+        let none_str: Option<PCWSTR> = None;
+        let none_hwnd: Option<HWND> = None;
+
+        let progman = FindWindowW(w!("Progman"), none_str).ok()?;
         // demander à explorer.exe de (re)créer la fenêtre WorkerW si absente
         let _ = SendMessageW(progman, WM_SPAWN_WORKERW, WPARAM(0), LPARAM(0));
+
+        let shell_dll: PCWSTR = w!("SHELLDLL_DefView");
         // recherche directe : WorkerW après SHELLDLL_DefView sous Progman
-        if let Ok(defview) = FindWindowExW(progman, None, w!("SHELLDLL_DefView"), None) {
-            if let Ok(workerw) = FindWindowExW(HWND(0), defview, w!("WorkerW"), None) {
+        if let Ok(defview) = FindWindowExW(progman, none_hwnd, shell_dll, none_str) {
+            let workerw_class: PCWSTR = w!("WorkerW");
+            if let Ok(workerw) = FindWindowExW(HWND::default(), Some(defview), workerw_class, none_str)
+            {
                 return Some(workerw);
             }
         }
@@ -100,7 +109,7 @@ fn find_workerw() -> Option<HWND> {
         let mut found: Option<HWND> = None;
         EnumWindows(
             Some(enum_workerw_cb),
-            LPARAM(&mut found as *mut Option<HWND> as usize),
+            LPARAM(&mut found as *mut Option<HWND> as isize),
         );
         found
     }
