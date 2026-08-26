@@ -1,0 +1,36 @@
+name: build-spike
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/desktop-hub-engine]
+    paths: ["spikes/**", ".github/workflows/**"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: spikes/workerw-proof/src-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/workerw-proof/src-tauri
+
+      - name: Build (debug)
+        run: cargo build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workerw-proof
+          path: spikes/workerw-proof/src-tauri/target/debug/workerw-proof.exe
