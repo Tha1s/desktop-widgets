@@ -172,9 +172,11 @@ pub fn run() {
                 }
             }
 
-            let progman = FindWindowW(w!("Progman"), PCWSTR::null())
-                .ok()
-                .filter(|h| !h.is_invalid());
+            let progman = unsafe {
+                FindWindowW(w!("Progman"), PCWSTR::null())
+                    .ok()
+                    .filter(|h| !h.is_invalid())
+            };
             match progman {
                 Some(p) => log(&format!("Progman found = {p:?}")),
                 None => log("Progman NOT FOUND"),
@@ -184,7 +186,9 @@ pub fn run() {
             let mut candidates = collect_workerw_windows();
             if let Some(p) = progman {
                 for _ in 0..10 {
-                    let _ = SendMessageW(p, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
+                    unsafe {
+                        let _ = SendMessageW(p, WM_SPAWN_WORKERW, Some(WPARAM(0)), Some(LPARAM(0)));
+                    }
                     let fresh = collect_workerw_windows();
                     if fresh.len() > candidates.len() {
                         candidates = fresh;
@@ -197,7 +201,7 @@ pub fn run() {
             }
             log(&format!("WorkerW candidates: {}", candidates.len()));
             for ww in &candidates {
-                let visible = IsWindowVisible(*ww).as_bool();
+                let visible = unsafe { IsWindowVisible(*ww).as_bool() };
                 let has_dv = has_defview_child(*ww);
                 log(&format!("candidate WorkerW {ww:?} visible={visible} hasDefViewChild={has_dv}"));
             }
