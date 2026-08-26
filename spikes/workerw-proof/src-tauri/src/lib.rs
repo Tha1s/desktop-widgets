@@ -14,6 +14,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const WM_SPAWN_WORKERW: u32 = 0x052C;
 
+type TopInfo = (HWND, String, bool, bool, (i32, i32, i32, i32));
+
 const CIRCLE_CX: f64 = 200.0;
 const CIRCLE_CY: f64 = 200.0;
 const CIRCLE_R: f64 = 120.0;
@@ -56,7 +58,7 @@ fn has_defview_child(hwnd: HWND) -> bool {
 }
 
 unsafe extern "system" fn collect_top_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let list = lparam.0 as *mut Vec<(HWND, String, bool, bool, (i32, i32, i32, i32))>;
+    let list = lparam.0 as *mut Vec<TopInfo>;
     let class = class_of(hwnd);
     if class == "Progman"
         || class == "WorkerW"
@@ -158,8 +160,11 @@ pub fn run() {
             log_window_identity(hwnd);
 
             unsafe {
-                let mut top: Vec<(HWND, String, bool, bool, (i32, i32, i32, i32))> = Vec::new();
-                let _ = EnumWindows(Some(collect_top_cb), LPARAM(&mut top as *mut _ as isize));
+                let mut top: Vec<TopInfo> = Vec::new();
+                let _ = EnumWindows(
+                    Some(collect_top_cb),
+                    LPARAM(&mut top as *mut Vec<TopInfo> as isize),
+                );
                 for (h, class, visible, has_dv, rect) in &top {
                     log(&format!(
                         "top: class='{class}' hwnd={h:?} visible={visible} hasDefViewChild={has_dv} rect={rect:?}"
